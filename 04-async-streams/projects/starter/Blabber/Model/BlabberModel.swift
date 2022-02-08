@@ -53,6 +53,21 @@ class BlabberModel: ObservableObject {
   /// Does a countdown and sends the message.
   func countdown(to message: String) async throws {
     guard !message.isEmpty else { return }
+    let counter = AsyncStream<String> { continuacion in
+      var countdown = 3
+      Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
+        guard countdown > 0 else {
+          timer.invalidate()
+          continuacion.yield(with: .success("🎉 " + message))
+          return
+        }
+        continuacion.yield("\(countdown) ...")
+        countdown -= 1
+      }
+    }
+    try await counter.forEach {
+      try await say($0)
+    }
   }
 
   /// Start live chat updates
@@ -83,6 +98,27 @@ class BlabberModel: ObservableObject {
   /// Reads the server chat stream and updates the data model.
   @MainActor
   private func readMessages(stream: URLSession.AsyncBytes) async throws {
+    var iterator = stream.lines.makeAsyncIterator()
+    guard let first = try await iterator.next() else {
+      throw "No response from server"
+    }
+    guard let data = first.data(using: .utf8),
+          let status = try? JSONDecoder()
+            .decode(ServerStatus.self, from: data) else {
+      throw "Invalid response from server"
+    }
+    messages.append(Message(message: "\(status.activeUsers) active users"))
+    let notifications = Task {
+      await observerAppStatus()
+    }
+    defer {
+      notifications.cancel()
+    }
+    for try await line in stream.lines {
+      if let data = line.data(using: .utf8), let update = try? JSONDecoder().decode(Message.self, from: data) {
+        messages.append(update)
+      }
+    }
   }
 
   /// Sends the user's message to the chat server
@@ -110,4 +146,29 @@ class BlabberModel: ObservableObject {
     configuration.timeoutIntervalForRequest = .infinity
     return URLSession(configuration: configuration)
   }()
+  
+  //
+  func observerAppStatus() async {
+    Task {
+        for await _ in await NotificationCenter.default
+          .notifications(for: UIApplication.willResignActiveNotification) {
+          try? await say("\(username) went away", isSystemMessage: true)
+        }
+      }
+
+      Task {
+        for await _ in await NotificationCenter.default
+          .notifications(for: UIApplication.didBecomeActiveNotification) {
+          try? await say("\(username) came back", isSystemMessage: true)
+        }
+      }
+  }
+}
+
+extension AsyncSequence {
+  func forEach(_ body: (Element) async throws -> Void) async throws {
+    for try await element in self {
+      try await body(element)
+    }
+  }
 }
