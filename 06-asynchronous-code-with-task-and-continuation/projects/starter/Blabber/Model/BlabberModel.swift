@@ -39,6 +39,7 @@ import UIKit
 class BlabberModel: ObservableObject {
   var username = ""
   var urlSession = URLSession.shared
+  var sleep: (UInt64) async throws -> Void = Task.sleep(nanoseconds:)
 
   init() {
   }
@@ -80,6 +81,9 @@ class BlabberModel: ObservableObject {
 
   /// Does a countdown and sends the message.
   func countdown(to message: String) async throws {
+    let sleep = self.sleep
+    try await sleep(1_000_000_000)
+
     guard !message.isEmpty else { return }
     var countdown = 3
     let counter = AsyncStream<String> {
