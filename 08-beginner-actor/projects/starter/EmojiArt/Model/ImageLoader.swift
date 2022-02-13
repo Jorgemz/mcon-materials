@@ -1,4 +1,4 @@
-/// Copyright (c) 2021 Razeware LLC
+/// Copyright (c) 2022 Razeware LLC
 /// 
 /// Permission is hereby granted, free of charge, to any person obtaining a copy
 /// of this software and associated documentation files (the "Software"), to deal
@@ -32,33 +32,55 @@
 
 import SwiftUI
 
-struct ThumbImage: View {
-  let file: ImageFile
-  @State var image = UIImage()
-  @State var overlay = ""
-  @EnvironmentObject var imageLoader: ImageLoader
+actor ImageLoader: ObservableObject {
+  enum DownloadState {
+    case inProgress(Task<UIImage, Error>)
+    case completed(UIImage)
+    case failed
+  }
+  
+  private(set) var cache: [String: DownloadState] = [:]
+  
+//  func add(_ image: UIImage, forKey key: String) {
+//    cache[key] = .completed(image)
+//  }
+  
+  func image(_ serverPath: String) async throws -> UIImage {
+    if let cached = cache[serverPath] {
+      switch cached {
+      case .completed(let image):
+        return image
+      case .inProgress(let task):
+        return try await task.value
+      case .failed: throw "Download failed"
+      }
+    }
+    
+    let download: Task<UIImage, Error> = Task.detached {
+      guard let url = URL(string: "http://localhost:8080".appending(serverPath))
+      else {
+        throw "Could not create the download URL"
+      }
+      print("Download: \(url.absoluteString)")
+      let data = try await URLSession.shared.data(from: url).0
+      return try resize(data, to: CGSize(width: 200, height: 200))
+    }
 
-  @MainActor func updateImage(_ image: UIImage) {
-    self.image = image
+    cache[serverPath] = .inProgress(download)
+
+    do {
+      let result = try await download.value
+      cache[serverPath] = .completed(result)
+      return result
+    } catch {
+      cache[serverPath] = .failed
+      throw error
+    }
+
+  }
+  
+  func clear() {
+    cache.removeAll()
   }
 
-  var body: some View {
-    Image(uiImage: image)
-      .resizable()
-      .aspectRatio(contentMode: .fill)
-      .foregroundColor(.gray)
-      .overlay {
-        if !overlay.isEmpty {
-          Image(systemName: overlay)
-        }
-      }
-      .task {
-        guard let image = try? await imageLoader.image(file.url) else {
-          overlay = "camera.metering.unknown"
-          return
-        }
-        updateImage(image)
-      }
-
-  }
 }
